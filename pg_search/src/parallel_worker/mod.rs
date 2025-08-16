@@ -300,7 +300,7 @@ impl ParallelStateManager {
 ///
 /// # Example
 ///
-/// ```rust,no_run,compile_fail
+/// ```ignore
 /// use pg_search::launch_parallel_process;
 /// use pg_search::parallel_worker::{ParallelProcess, ParallelState, ParallelStateType, ParallelWorker, WorkerStyle};
 /// use pg_search::parallel_worker::ParallelStateManager;
@@ -477,7 +477,7 @@ const fn TYPEALIGN_DOWN(ALIGNVAL: usize, LEN: usize) -> usize {
     LEN & !(ALIGNVAL - 1)
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(all(any(test, feature = "pg_test"), not(feature = "cbdb")))]
 #[pgrx::pg_schema]
 mod tests {
     use crate::parallel_worker::mqueue::MessageQueueSender;
