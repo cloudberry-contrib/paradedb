@@ -185,6 +185,7 @@ impl<CS: CustomScan> CustomPathBuilder<CS> {
                             rel,
                             pg_sys::bms_copy((*rel).lateral_relids),
                         ),
+                        locus: pg_sys::cdbpathlocus_from_baserel(root, rel, 0),
                         ..Default::default()
                     },
                     methods: CS::custom_path_methods(),
