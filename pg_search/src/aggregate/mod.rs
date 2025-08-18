@@ -325,7 +325,7 @@ pub fn execute_aggregate(
             ParallelAggregation<ParallelAggregationWorker>,
             process,
             WorkerStyle::Query,
-            nworkers,
+            0,
             16384
         ) {
             // signal our workers with the number of workers actually launched

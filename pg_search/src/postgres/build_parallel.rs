@@ -545,7 +545,7 @@ pub(super) fn build_index(
         ParallelBuild<BuildWorker>,
         process,
         WorkerStyle::Maintenance,
-        nworkers,
+        0,
         1024
     ) {
         let nlaunched = process.launched_workers();

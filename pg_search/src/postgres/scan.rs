@@ -280,9 +280,19 @@ pub unsafe extern "C-unwind" fn amgetbitmap(
     scan: pg_sys::IndexScanDesc,
     tbm: *mut *mut pg_sys::Node,
 ) -> i64 {
-    assert!(!tbm.is_null());
     assert!(!scan.is_null());
-    let tbm = *tbm as *mut pg_sys::TIDBitmap;
+    
+    let tbm = if (*tbm).is_null() {
+        // XXX should we use less than work_mem for this?
+        let new_tbm = pg_sys::tbm_create(pg_sys::work_mem as i64 * 1024, (*scan).dsa);
+        *tbm = new_tbm as *mut pg_sys::Node;
+        new_tbm
+    } else {
+        // TODO: Add IsA check for TIDBitmap if needed
+        // else if (!IsA(*bmNodeP, TIDBitmap))
+        //     elog(ERROR, "non bloom bitmap");
+        (*tbm) as *mut pg_sys::TIDBitmap
+    };
     let state = {
         // SAFETY:  We set `scan.opaque` to a leaked pointer of type `PgSearchScanState` above in
         // amrescan, which is always called prior to this function
