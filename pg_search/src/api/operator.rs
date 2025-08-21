@@ -192,6 +192,8 @@ pub(crate) fn estimate_selectivity(
         return None;
     }
 
+    return None;
+
     let search_reader = SearchIndexReader::open(
         indexrel,
         search_query_input,

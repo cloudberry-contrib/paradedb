@@ -243,8 +243,7 @@ CREATE TABLE app.tags (
                           org_id VARCHAR(64) DEFAULT current_setting('app.org_id'),
                           name VARCHAR(64) NOT NULL,
                           created_at TIMESTAMPTZ DEFAULT NOW(),
-                          created_by VARCHAR(64) DEFAULT app.current_actor_id(),
-                          UNIQUE (org_id, name)
+                          created_by VARCHAR(64) DEFAULT app.current_actor_id()
 );
 
 -- Enable Row Level Security on all tables
