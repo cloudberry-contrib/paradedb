@@ -194,6 +194,23 @@ pub fn per_tuple_cost() -> f64 {
     PER_TUPLE_COST.get()
 }
 
+/// Get the current gp_role setting (for Cloudberry/Greenplum)
+pub fn gp_role() -> Option<String> {
+    unsafe {
+        let gp_role_guc = pg_sys::GetConfigOptionByName(c"gp_role".as_ptr(), std::ptr::null_mut(), false);
+        if !gp_role_guc.is_null() {
+            Some(std::ffi::CStr::from_ptr(gp_role_guc).to_string_lossy().to_string())
+        } else {
+            None
+        }
+    }
+}
+
+/// Check if running on Cloudberry/Greenplum coordinator node
+pub fn is_gp_coordinator() -> bool {
+    gp_role().map_or(false, |role| role == "dispatch")
+}
+
 // NB:  These limits come from [`tantivy::index_writer::MEMORY_BUDGET_NUM_BYTES_MAX`], which is not publicly exposed
 mod limits {
     const MARGIN_IN_BYTES: usize = 1_000_000;

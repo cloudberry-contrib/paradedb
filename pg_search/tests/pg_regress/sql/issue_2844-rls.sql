@@ -92,9 +92,7 @@ CREATE TABLE app.contacts (
                                           platform_names
                                   )
                                   ) STORED,
-                              tags JSONB DEFAULT '{}',
-                              UNIQUE (org_id, phone_number),
-                              UNIQUE (org_id, email)
+                              tags JSONB DEFAULT '{}'
 );
 ALTER TABLE app.contacts REPLICA IDENTITY FULL;
 

@@ -193,6 +193,11 @@ pub extern "C-unwind" fn paradedb_upper_paths_callback<CS>(
         return;
     }
 
+    // Check if running on Cloudberry/Greenplum coordinator node
+    if gucs::is_gp_coordinator() {
+        return;
+    }
+
     unsafe {
         let Some(path) = CS::create_custom_path(CustomPathBuilder::new(
             root,

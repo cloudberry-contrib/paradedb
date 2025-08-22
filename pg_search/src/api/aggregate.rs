@@ -32,6 +32,11 @@ pub fn aggregate(
     memory_limit: default!(i64, 500000000),
     bucket_limit: default!(i64, 65000),
 ) -> Result<JsonB, Box<dyn Error>> {
+    // Check if running on Cloudberry/Greenplum coordinator node
+    if crate::gucs::is_gp_coordinator() {
+        pgrx::error!("ParadeDB aggregate function is not supported on Cloudberry coordinator nodes.");
+    }
+    
     let relation = unsafe { PgSearchRelation::from_pg(index.as_ptr()) };
     Ok(JsonB(execute_aggregate(
         &relation,

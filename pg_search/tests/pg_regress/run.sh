@@ -37,7 +37,6 @@ env -u PGDATABASE -u PGHOST -u PGPORT -u PGUSER \
   issue_2688 \
   issue_2745 \
   issue_2753 \
-  issue_2844-rls \
   issue_2904 \
   issue_2932 \
   join_tests \

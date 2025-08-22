@@ -182,6 +182,11 @@ pub(crate) fn estimate_selectivity(
     indexrel: &PgSearchRelation,
     search_query_input: SearchQueryInput,
 ) -> Option<f64> {
+    // Check if running on Cloudberry/Greenplum coordinator node
+    if crate::gucs::is_gp_coordinator() {
+        return None;
+    }
+
     let reltuples = indexrel
         .heap_relation()
         .expect("indexrel should be an index")
@@ -191,8 +196,6 @@ pub(crate) fn estimate_selectivity(
         // we can't estimate against a non-normal or negative estimate of heap tuples
         return None;
     }
-
-    return None;
 
     let search_reader = SearchIndexReader::open(
         indexrel,
