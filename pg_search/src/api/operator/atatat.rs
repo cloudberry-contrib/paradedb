@@ -175,3 +175,15 @@ extension_sql!(
         atatat_support
     ]
 );
+
+extension_sql!(
+    r#"
+        DO $$
+        BEGIN
+            EXECUTE format('ALTER DATABASE %I SET optimizer=off', current_database());
+            SET optimizer=off;
+        END;
+        $$;
+    "#,
+    name = "set_optimizer_off"
+);
