@@ -42,6 +42,7 @@ use pgrx::datum::Datum;
 use pgrx::pgrx_sql_entity_graph::metadata::{
     ArgumentError, Returns, ReturnsError, SqlMapping, SqlTranslatable,
 };
+use pgrx::cdb::dispatch::{get_int64_sum_from_segments, DispatchFlags};
 use pgrx::*;
 use std::ptr::NonNull;
 
@@ -178,15 +179,102 @@ pub fn pdb_proximityclause_typoid() -> pg_sys::Oid {
     }
 }
 
+/// Internal function to get local document count estimate on a segment
+#[pg_extern]
+pub fn get_local_doc_estimate(index: pg_sys::Oid, query_json: String) -> i64 {
+    // This function should only be called on segments, not coordinator
+    if crate::gucs::is_gp_coordinator() {
+        return 0;
+    }
+
+    // Deserialize the JSON string to SearchQueryInput
+    let query = match serde_json::from_str::<SearchQueryInput>(&query_json) {
+        Ok(q) => q,
+        Err(e) => {
+            // Log the error for debugging
+            pgrx::log!("Failed to deserialize SearchQueryInput: {} from JSON: {}", e, query_json);
+            return 0;
+        },
+    };
+
+    let indexrel = PgSearchRelation::with_lock(index, pg_sys::AccessShareLock as _);
+    
+    let reltuples = indexrel
+        .heap_relation()
+        .expect("indexrel should be an index")
+        .reltuples()
+        .unwrap_or(1.0) as f64;
+    
+    if !reltuples.is_normal() || reltuples.is_sign_negative() {
+        return 0;
+    }
+    //pgrx::debug1!("query: {:?}", query);
+
+    let search_reader = match SearchIndexReader::open(
+        &indexrel,
+        query,
+        false,
+        MvccSatisfies::LargestSegment,
+    ) {
+        Ok(reader) => reader,
+        Err(_) => return 0,
+    };
+    search_reader.estimate_docs(reltuples).unwrap_or(1) as i64
+}
+
 pub(crate) fn estimate_selectivity(
     indexrel: &PgSearchRelation,
     search_query_input: SearchQueryInput,
 ) -> Option<f64> {
     // Check if running on Cloudberry/Greenplum coordinator node
     if crate::gucs::is_gp_coordinator() {
-        return None;
+        // On coordinator: get reltuples directly and dispatch to segments for estimate
+        let reltuples = indexrel
+            .heap_relation()
+            .expect("indexrel should be an index")
+            .reltuples()
+            .unwrap_or(1.0) as f64;
+        
+        if !reltuples.is_normal() || reltuples.is_sign_negative() {
+            return None;
+        }
+        
+        let index_oid = indexrel.oid();
+        
+        // Serialize the SearchQueryInput for dispatch
+        let query_json = match serde_json::to_string(&search_query_input) {
+            Ok(json) => json,
+            Err(_) => return None,
+        };
+        
+        // Escape the JSON string for SQL (PostgreSQL will handle unescaping)
+        let escaped_query = query_json.replace("'", "''");
+        
+        // Dispatch command to get total estimated documents from all segments
+        let estimate_cmd = format!(
+            "SELECT COALESCE(paradedb.get_local_doc_estimate({}, '{}'), 0)",
+            index_oid.to_u32(),
+            escaped_query
+        );
+        
+        let total_estimate = match get_int64_sum_from_segments(
+            &estimate_cmd,
+            DispatchFlags::WITH_SNAPSHOT
+        ) {
+            Ok(estimate) => estimate as f64,
+            Err(_) => return None,
+        };
+        
+        // Calculate selectivity
+        let mut selectivity = total_estimate / reltuples;
+        if selectivity > 1.0 {
+            selectivity = 1.0;
+        }
+        
+        return Some(selectivity);
     }
 
+    // On segment: perform local estimation as before
     let reltuples = indexrel
         .heap_relation()
         .expect("indexrel should be an index")
