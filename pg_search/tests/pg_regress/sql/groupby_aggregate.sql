@@ -5,7 +5,8 @@
 -- for the aggregate custom scan feature.
 
 CREATE EXTENSION IF NOT EXISTS pg_search;
-SET paradedb.enable_aggregate_custom_scan TO on;
+SET paradedb.enable_aggregate_custom_scan TO OFF;
+SET extra_float_digits = 2;
 
 -- =====================================================================
 -- Test Data Setup

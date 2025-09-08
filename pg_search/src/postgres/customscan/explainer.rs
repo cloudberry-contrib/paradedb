@@ -44,6 +44,7 @@ impl Explainer {
     }
 
     pub fn add_query(&mut self, query: &SearchQueryInput) {
+        pgrx::debug1!("add_query query is {:?}", query);
         let mut json_value = serde_json::to_value(query).expect("query should serialize to json");
         cleanup_variabilities_from_tantivy_query(&mut json_value);
         let updated_json_query =
