@@ -49,6 +49,8 @@ pub struct PrivateData {
     // Additional search predicates from join filters that are relevant for snippet/score generation
     // Stores the entire simplified Boolean expression to preserve OR structures like (TRUE OR name:"Rowling")
     join_predicates: Option<SearchQueryInput>,
+    // 跨表 OR 优化标记
+    needs_cross_table_expansion: bool,
 }
 
 mod var_attname_lookup_serializer {
@@ -214,6 +216,10 @@ impl PrivateData {
     pub fn set_join_predicates(&mut self, predicates: Option<SearchQueryInput>) {
         self.join_predicates = predicates;
     }
+
+    pub fn set_needs_cross_table_expansion(&mut self, needs_expansion: bool) {
+        self.needs_cross_table_expansion = needs_expansion;
+    }
 }
 
 //
@@ -277,5 +283,9 @@ impl PrivateData {
 
     pub fn join_predicates(&self) -> &Option<SearchQueryInput> {
         &self.join_predicates
+    }
+
+    pub fn needs_cross_table_expansion(&self) -> bool {
+        self.needs_cross_table_expansion
     }
 }

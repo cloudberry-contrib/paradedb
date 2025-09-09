@@ -1743,3 +1743,80 @@ mod tests {
         }
     }
 }
+
+/// 跨表 OR 条件分析结果
+#[derive(Debug, Clone)]
+pub struct CrossTableOrAnalysis {
+    pub can_optimize: bool,
+    pub needs_all_expansion: bool,
+}
+
+/// 扩展查询构建支持
+impl Qual {
+    /// 分析跨表的 OR 条件，确定是否可以下推优化来消除 JOIN Filter
+    pub fn analyze_cross_table_or(&self) -> Option<CrossTableOrAnalysis> {
+        match self {
+            Qual::Or(quals) => {
+                self.analyze_or_conditions(quals)
+            }
+            _ => None,
+        }
+    }
+
+    fn analyze_or_conditions(&self, quals: &[Qual]) -> Option<CrossTableOrAnalysis> {
+        let mut has_search_condition = false;
+        let mut has_external_condition = false;
+
+        // 分析每个 OR 分支
+        for qual in quals {
+            match qual {
+                // 搜索条件 (OpExpr with @@@ operator)
+                Qual::OpExpr { opno, .. } => {
+                    if *opno == unsafe { crate::postgres::customscan::operator_oid("@@@(anyelement,paradedb.searchqueryinput)") } {
+                        has_search_condition = true;
+                    }
+                }
+                // 外部表条件（通过 ExternalVar/ExternalExpr 表示）
+                Qual::ExternalVar | Qual::ExternalExpr => {
+                    has_external_condition = true;
+                }
+                // 其他类型的搜索相关条件
+                Qual::PushdownExpr { .. } => {
+                    has_search_condition = true;
+                }
+                _ => {
+                    // 如果有无法处理的复杂条件，暂时不优化
+                    continue;
+                }
+            }
+        }
+
+        // 如果既有本表的搜索条件又有外表条件，可以优化
+        if has_search_condition && has_external_condition {
+            Some(CrossTableOrAnalysis {
+                can_optimize: true,
+                needs_all_expansion: true,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// 构建扩展的搜索查询，包含原始条件和 All 以支持跨表 OR 优化
+pub fn build_expanded_search_query(
+    original_query: SearchQueryInput,
+    needs_expansion: bool,
+) -> SearchQueryInput {
+    if needs_expansion {
+        // 构建: original_condition OR All
+        SearchQueryInput::Boolean {
+            must: vec![],
+            should: vec![original_query, SearchQueryInput::All],
+            must_not: vec![],
+        }
+    } else {
+        // 如果不需要扩展，返回原始查询
+        original_query
+    }
+}

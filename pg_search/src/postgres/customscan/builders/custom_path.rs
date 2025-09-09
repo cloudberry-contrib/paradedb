@@ -136,6 +136,9 @@ pub struct CustomPathBuilder<CS: CustomScan> {
     custom_path_node: pg_sys::CustomPath,
 
     custom_paths: PgList<pg_sys::Path>,
+    
+    // 跨表 OR 优化标记
+    needs_cross_table_expansion: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -192,6 +195,7 @@ impl<CS: CustomScan> CustomPathBuilder<CS> {
                     ..Default::default()
                 },
                 custom_paths: PgList::default(),
+                needs_cross_table_expansion: false,
             }
         }
     }
@@ -263,6 +267,16 @@ impl<CS: CustomScan> CustomPathBuilder<CS> {
             nworkers.try_into().expect("nworkers should be a valid i32");
 
         self
+    }
+
+    /// 设置跨表 OR 优化标记
+    pub fn set_cross_table_or_optimization(&mut self, needs_expansion: bool) {
+        self.needs_cross_table_expansion = needs_expansion;
+    }
+
+    /// 获取跨表 OR 优化标记
+    pub fn needs_cross_table_expansion(&self) -> bool {
+        self.needs_cross_table_expansion
     }
 
     /// Build a CustomPath using the given private data.

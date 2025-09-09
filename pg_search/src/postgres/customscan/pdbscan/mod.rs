@@ -94,8 +94,23 @@ impl PdbScan {
             .as_ref()
             .expect("custom_state.indexrel should already be open");
 
-        let search_query_input = state.custom_state().search_query_input();
+        let base_search_query_input = state.custom_state().search_query_input();
         let need_scores = state.custom_state().need_scores();
+
+        // 应用跨表 OR 优化：如果需要扩展查询，添加 All 条件
+        let (custom_scan, private_data) = unsafe { 
+            let custom_scan = state.csstate.ss.ps.plan as *mut pg_sys::CustomScan;
+            let private_data = PrivateData::from((*custom_scan).custom_private);
+            (custom_scan, private_data)
+        };
+        let search_query_input = if private_data.needs_cross_table_expansion() {
+            crate::postgres::customscan::qual_inspect::build_expanded_search_query(
+                base_search_query_input.clone(), 
+                true
+            )
+        } else {
+            base_search_query_input.clone()
+        };
 
         let search_reader =
             SearchIndexReader::open(indexrel, search_query_input.clone(), need_scores, unsafe {
@@ -195,6 +210,16 @@ impl PdbScan {
             false, // Base relation quals should not convert external to all
             &mut state,
         );
+
+        // 新增：检查是否可以通过 OR 条件优化消除 JOIN Filter
+        if let Some(ref qual) = quals {
+            if let Some(analysis) = qual.analyze_cross_table_or() {
+                if analysis.can_optimize {
+                    // 标记这个扫描节点需要扩展查询以支持跨表 OR 优化
+                    builder.set_cross_table_or_optimization(analysis.needs_all_expansion);
+                }
+            }
+        }
 
         // If we couldn't push down quals, try to push down quals from the join
         // This is only done if we have a join predicate, and only if we have used our operator
@@ -531,6 +556,9 @@ impl CustomScan for PdbScan {
 
             // indicate that we'll be doing projection ourselves
             builder = builder.set_flag(Flags::Projection);
+
+            // 传递跨表 OR 优化信息到私有数据
+            custom_private.set_needs_cross_table_expansion(builder.needs_cross_table_expansion());
 
             Some(builder.build(custom_private))
         }

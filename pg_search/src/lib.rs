@@ -30,6 +30,9 @@ pub mod parallel_worker;
 use self::postgres::customscan;
 use pgrx::*;
 
+// 规划器钩子静态变量
+static mut ORIGINAL_PLANNER_HOOK: Option<pg_sys::planner_hook_type> = None;
+
 /// The prefix applied to tantivy fields that are actually Postgres expressions.
 pub const PG_SEARCH_PREFIX: &str = "_pg_search_";
 
@@ -87,6 +90,9 @@ pub unsafe extern "C-unwind" fn _PG_init() {
     #[allow(deprecated)]
     customscan::register_rel_pathlist(customscan::pdbscan::PdbScan);
     customscan::register_upper_path(customscan::aggregatescan::AggregateScan);
+
+    // Install query planner hook to optimize cross-table OR conditions
+    install_planner_hook();
 }
 
 #[pg_extern]
@@ -136,3 +142,103 @@ pub mod pg_test {
         options
     }
 }
+
+/// Install query planner hook
+unsafe fn install_planner_hook() {
+    #[allow(static_mut_refs)]
+    if ORIGINAL_PLANNER_HOOK.is_none() {
+        ORIGINAL_PLANNER_HOOK = Some(pg_sys::planner_hook);
+        pg_sys::planner_hook = Some(pg_search_planner_hook);
+    }
+}
+
+/// ParadeDB query planner hook for checking distributed query compatibility
+#[pg_guard]
+unsafe extern "C-unwind" fn pg_search_planner_hook(
+    parse: *mut pg_sys::Query,
+    query_string: *const std::os::raw::c_char,
+    cursor_options: i32,
+    bound_params: pg_sys::ParamListInfo,
+) -> *mut pg_sys::PlannedStmt {
+    // Call original planner
+    #[allow(static_mut_refs)]
+    let planned_stmt = if let Some(Some(original_hook)) = ORIGINAL_PLANNER_HOOK {
+        original_hook(parse, query_string, cursor_options, bound_params)
+    } else {
+        pg_sys::standard_planner(parse, query_string, cursor_options, bound_params)
+    };
+
+    // Check for motion nodes and report error if found
+    check_for_motion_nodes(planned_stmt);
+
+    planned_stmt
+}
+
+/// Check execution plan for motion nodes and report error if found
+unsafe fn check_for_motion_nodes(planned_stmt: *mut pg_sys::PlannedStmt) {
+    if planned_stmt.is_null() || (*planned_stmt).planTree.is_null() {
+        return;
+    }
+
+    // Traverse execution plan tree to detect motion nodes
+    walk_plan_tree((*planned_stmt).planTree, &mut |node| check_motion_node(node));
+}
+
+/// Helper function to traverse plan tree
+unsafe fn walk_plan_tree(
+    plan_node: *mut pg_sys::Plan,
+    visitor: &mut dyn FnMut(*mut pg_sys::Plan)
+) {
+    if plan_node.is_null() {
+        return;
+    }
+
+    visitor(plan_node);
+
+    // Recursively visit child nodes
+    walk_plan_tree((*plan_node).lefttree, visitor);
+    walk_plan_tree((*plan_node).righttree, visitor);
+
+    // Handle child nodes of other plan node types
+    match (*plan_node).type_ {
+        pg_sys::NodeTag::T_Append => {
+            let append_plan = plan_node as *mut pg_sys::Append;
+            let subplans = PgList::<pg_sys::Plan>::from_pg((*append_plan).appendplans);
+            for subplan in subplans.iter_ptr() {
+                walk_plan_tree(subplan, visitor);
+            }
+        }
+        pg_sys::NodeTag::T_SubqueryScan => {
+            let subquery_plan = plan_node as *mut pg_sys::SubqueryScan;
+            walk_plan_tree((*subquery_plan).subplan, visitor);
+        }
+        _ => {
+            // Other node types don't need special handling for now
+        }
+    }
+}
+
+/// Check if plan node is a motion node and report error if found
+unsafe fn check_motion_node(plan_node: *mut pg_sys::Plan) {
+    if plan_node.is_null() {
+        return;
+    }
+
+    // Check for Motion node type (T_Motion = 70 in CBDB)
+    if (*plan_node).type_ == pg_sys::NodeTag::T_Motion {
+        let motion_node = plan_node as *mut pg_sys::Motion;
+        let motion_type = (*motion_node).motionType;
+
+        // Allow Gather Motion types (used to collect results), but block other Motion types
+        match motion_type {
+            pg_sys::MotionType::MOTIONTYPE_GATHER |
+            pg_sys::MotionType::MOTIONTYPE_GATHER_SINGLE => {
+                // Gather Motion is allowed - it just collects results from segments
+            }
+            _ => {
+                error!("ParadeDB search queries are not supported in distributed environments with data redistribution motion nodes");
+            }
+        }
+    }
+}
+
