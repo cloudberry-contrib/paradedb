@@ -33,6 +33,7 @@ use pgrx::JsonB;
 use pgrx::PgRelation;
 use serde_json::Value;
 use tantivy::schema::FieldType;
+use pgrx::cdb::dispatch::{dispatch_if_coordinator, DispatchFlags};
 
 #[allow(clippy::type_complexity)]
 #[pg_extern]
@@ -237,6 +238,52 @@ unsafe fn vacuum_info(
     TableIterator::new(result)
 }
 
+/// Internal function to get local segment info on a segment
+#[pg_extern]
+pub fn get_local_index_info(index: pg_sys::Oid, show_invisible: bool) -> anyhow::Result<JsonB> {
+    // This function should only be called on segments, not coordinator
+    if crate::gucs::is_gp_coordinator() {
+        return Ok(JsonB(serde_json::Value::Array(vec![])));
+    }
+
+    let index = PgSearchRelation::with_lock(index, pg_sys::AccessShareLock as _);
+    let index_kind = IndexKind::for_index(index)?;
+
+    let mut results = Vec::new();
+    for index in index_kind.partitions() {
+        // open the specified index
+        let mut segment_components = MetaPage::open(&index).segment_metas();
+        let all_entries = unsafe { segment_components.list() };
+
+        for entry in all_entries {
+            if !show_invisible && unsafe { !entry.visible() } {
+                continue;
+            }
+            
+            let row = serde_json::json!({
+                "index_name": index.name().to_owned(),
+                "visible": unsafe { entry.visible() },
+                "recyclable": unsafe { entry.recyclable(segment_components.bman_mut()) },
+                "xmax": entry.xmax,
+                "segno": entry.segment_id.short_uuid_string(),
+                "byte_size": entry.byte_size(),
+                "num_docs": entry.num_docs(),
+                "num_deleted": entry.num_deleted_docs(),
+                "termdict_bytes": entry.terms.as_ref().map(|file| file.total_bytes),
+                "postings_bytes": entry.postings.as_ref().map(|file| file.total_bytes),
+                "positions_bytes": entry.positions.as_ref().map(|file| file.total_bytes),
+                "fast_fields_bytes": entry.fast_fields.as_ref().map(|file| file.total_bytes),
+                "fieldnorms_bytes": entry.field_norms.as_ref().map(|file| file.total_bytes),
+                "store_bytes": entry.store.as_ref().map(|file| file.total_bytes),
+                "deletes_bytes": entry.delete.as_ref().map(|file| file.file_entry.total_bytes),
+            });
+            results.push(row);
+        }
+    }
+
+    Ok(JsonB(serde_json::Value::Array(results)))
+}
+
 #[allow(clippy::type_complexity)]
 #[pg_extern]
 fn index_info(
@@ -264,6 +311,70 @@ fn index_info(
         ),
     >,
 > {
+    // Use dispatch if on coordinator, otherwise process locally
+    let index_oid = index.oid();
+    
+    // Try to dispatch to segments if we're on coordinator
+    if let Some(dispatch_result) = dispatch_if_coordinator(
+        &format!(
+            "SELECT paradedb.get_local_index_info({}, {})",
+            index_oid.to_u32(),
+            show_invisible
+        ),
+        DispatchFlags::WITH_SNAPSHOT,
+    ) {
+        match dispatch_result {
+            Ok(result_set) => {
+                let mut all_results = Vec::new();
+                
+                // Process results from each segment using iterator
+                for result in result_set.iter_results() {
+                    if let Ok(pg_result) = result {
+                        // Check if we have at least one row
+                        let ntuples = unsafe { pg_sys::PQntuples(pg_result) };
+                        if ntuples > 0 {
+                            // Get the JSON result from the first column (0-based)
+                            if let Ok(Some(jsonb_str)) = unsafe { 
+                                pgrx::cdb::dispatch::CdbPgResults::get_field_value(pg_result, 0, 0) 
+                            } {
+                                if let Ok(jsonb_value) = serde_json::from_str::<serde_json::Value>(&jsonb_str) {
+                                    if let serde_json::Value::Array(segment_results) = jsonb_value {
+                                        for segment_result in segment_results {
+                                            all_results.push((
+                                                segment_result["index_name"].as_str().unwrap_or("").to_string(),
+                                                segment_result["visible"].as_bool().unwrap_or(false),
+                                                segment_result["recyclable"].as_bool().unwrap_or(false),
+                                                pg_sys::TransactionId::from(segment_result["xmax"].as_u64().unwrap_or(0) as u32),
+                                                segment_result["segno"].as_str().unwrap_or("").to_string(),
+                                                segment_result["byte_size"].as_u64().map(|v| v.into()),
+                                                segment_result["num_docs"].as_u64().map(|v| v.into()),
+                                                segment_result["num_deleted"].as_u64().map(|v| v.into()),
+                                                segment_result["termdict_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["postings_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["positions_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["fast_fields_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["fieldnorms_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["store_bytes"].as_u64().map(|v| v.into()),
+                                                segment_result["deletes_bytes"].as_u64().map(|v| v.into()),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                return Ok(TableIterator::new(all_results));
+            }
+            Err(_) => {
+                // Fallback to empty result if dispatch fails
+                return Ok(TableIterator::new(Vec::new()));
+            }
+        }
+    }
+
+    // On segment or non-distributed environment: perform local operation as before
     // # Safety
     //
     // Lock the index relation until the end of this function so it is not dropped or
