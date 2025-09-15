@@ -3122,6 +3122,7 @@ dependencies = [
  "ordered-float",
  "parking_lot",
  "pgrx",
+ "pgrx-pg-sys",
  "pgrx-tests",
  "postcard",
  "proptest",
@@ -3146,8 +3147,6 @@ dependencies = [
 [[package]]
 name = "pgrx"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab5bc1d60d3bc3c966d307a3c7313b1ebfb49a0ec183be3f1a057df0bcc9988"
 dependencies = [
  "atomic-traits",
  "bitflags 2.9.1",
@@ -3170,8 +3169,6 @@ dependencies = [
 [[package]]
 name = "pgrx-bindgen"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9804b74c211a9edd550cd974718f8cc407dec50d8e9cafb906e0b042ba434af0"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
@@ -3189,8 +3186,6 @@ dependencies = [
 [[package]]
 name = "pgrx-macros"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f230769493bf567f137de23264d604d267dd72b8a77c596528e43cf423c6208e"
 dependencies = [
  "pgrx-sql-entity-graph",
  "proc-macro2",
@@ -3201,8 +3196,6 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-config"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49b64c071c2a46a19ab4521120a25b02b598f4abf6e9b4b1769a7922edeee3de"
 dependencies = [
  "cargo_toml",
  "codepage",
@@ -3222,8 +3215,6 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-sys"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcbfa98ec7a90252d13a78ac666541173dbb01a2fc1ba20131db6490c0711125"
 dependencies = [
  "cee-scape",
  "libc",
@@ -3237,8 +3228,6 @@ dependencies = [
 [[package]]
 name = "pgrx-sql-entity-graph"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e79bbf5a33cff6cfdc6dda3a976cd931c995eaa2c073a7c59b8f8fe8f6faa073"
 dependencies = [
  "convert_case 0.8.0",
  "eyre",
@@ -3253,8 +3242,6 @@ dependencies = [
 [[package]]
 name = "pgrx-tests"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9791c709882f3af9545bcca71670fdd82768f67a428b416b6210eae3773dbd0d"
 dependencies = [
  "clap-cargo",
  "eyre",

@@ -168,8 +168,10 @@ unsafe extern "C-unwind" fn pg_search_planner_hook(
         pg_sys::standard_planner(parse, query_string, cursor_options, bound_params)
     };
 
-    // Check for motion nodes and report error if found
-    check_for_motion_nodes(planned_stmt);
+    // Check for motion nodes and report error if found (skip only for EXPLAIN without ANALYZE)
+    if !should_skip_motion_check(parse) {
+        check_for_motion_nodes(planned_stmt);
+    }
 
     planned_stmt
 }
@@ -240,5 +242,58 @@ unsafe fn check_motion_node(plan_node: *mut pg_sys::Plan) {
             }
         }
     }
+}
+
+/// Check if motion node checking should be skipped based on EXPLAIN analysis or non-SELECT statements
+unsafe fn should_skip_motion_check(parse: *mut pg_sys::Query) -> bool {
+    if parse.is_null() {
+        return false;
+    }
+
+    // Skip motion check for non-SELECT DML operations - only SELECT needs motion node checking
+    match (*parse).commandType {
+        pg_sys::CmdType::CMD_INSERT |
+        pg_sys::CmdType::CMD_UPDATE |
+        pg_sys::CmdType::CMD_DELETE => {
+            return true;
+        }
+        pg_sys::CmdType::CMD_SELECT => {
+            // SELECT statements need motion node checking, continue with other checks
+        }
+        _ => {
+            // Continue with other checks for non-DML commands
+        }
+    }
+
+    // Check if this is a utility statement (EXPLAIN is a utility statement)
+    let utility_stmt = (*parse).utilityStmt;
+    if utility_stmt.is_null() || (*utility_stmt).type_ != pg_sys::NodeTag::T_ExplainStmt {
+        return false; // Not an EXPLAIN command, don't skip
+    }
+
+    // Cast to ExplainStmt
+    let explain_stmt = utility_stmt as *mut pg_sys::ExplainStmt;
+    let options = (*explain_stmt).options;
+
+    // Check if ANALYZE option is present
+    if !options.is_null() {
+        let option_list = PgList::<pg_sys::DefElem>::from_pg(options);
+        for option in option_list.iter_ptr() {
+            if !option.is_null() {
+                let defname = (*option).defname;
+                if !defname.is_null() {
+                    let option_name = std::ffi::CStr::from_ptr(defname);
+                    if let Ok(name_str) = option_name.to_str() {
+                        if name_str.eq_ignore_ascii_case("analyze") {
+                            return false; // EXPLAIN ANALYZE needs execution, don't skip motion check
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // This is EXPLAIN without ANALYZE, skip motion check
+    true
 }
 
