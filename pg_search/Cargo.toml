@@ -10,7 +10,8 @@ build = "build.rs"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["pg17"]
+default = ["pg14", "cbdb"]
+cbdb = ["pg14", "pgrx/cbdb", "pgrx-pg-sys/cbdb"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
@@ -37,6 +38,10 @@ parking_lot = "0.12.4"
 tokenizers = { path = "../tokenizers" }
 pgrx = { path = "/home/jyang102/work/pgrx/pgrx/", features = ["pg14", "cbdb"] }
 pgrx-pg-sys = { path = "/home/jyang102/work/pgrx/pgrx-pg-sys/", features = ["pg14", "cbdb"] }
+#pgrx-bindgen = {path = "/home/jyang102/work/pgrx/pgrx-bindgen/" }
+#pgrx-pg-config = {path = "/home/jyang102/work/pgrx/pgrx-pg-config/" }
+#pgrx-sql-entity-graph = {path = "/home/jyang102/work/pgrx/pgrx-sql-entity-graph/" }
+#pgrx-macros = {path = "/home/jyang102/work/pgrx/pgrx-macros/" }
 rustc-hash = "2.1.1"
 serde = "1.0.219"
 serde_json = { version = "1.0.140", features = ["preserve_order"] }
@@ -82,3 +87,9 @@ ignored = ["indexmap", "libc", "tantivy-common"]
 [[bin]]
 name = "pgrx_embed_pg_search"
 path = "./src/bin/pgrx_embed.rs"
+
+[profile.dev]
+opt-level = 0
+debug = true
+panic = "unwind"
+incremental = true
