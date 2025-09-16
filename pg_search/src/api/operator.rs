@@ -461,6 +461,7 @@ unsafe fn wrap_with_index(indexrel: PgSearchRelation, rhs: *mut pg_sys::Node) ->
             inputcollid: pg_sys::Oid::INVALID,
             args: args.into_pg(),
             location: -1,
+            is_tablefunc: false,
         }
         .palloc()
         .cast()

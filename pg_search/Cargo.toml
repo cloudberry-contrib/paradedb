@@ -35,7 +35,8 @@ memoffset = "0.9.1"
 once_cell = "1.21.3"
 parking_lot = "0.12.4"
 tokenizers = { path = "../tokenizers" }
-pgrx.workspace = true
+pgrx = { path = "/home/jyang102/work/pgrx/pgrx/", features = ["pg14", "cbdb"] }
+pgrx-pg-sys = { path = "/home/jyang102/work/pgrx/pgrx-pg-sys/", features = ["pg14", "cbdb"] }
 rustc-hash = "2.1.1"
 serde = "1.0.219"
 serde_json = { version = "1.0.140", features = ["preserve_order"] }
@@ -67,7 +68,7 @@ macros = { path = "../macros" }
 half = "2.6.0"
 
 [dev-dependencies]
-pgrx-tests.workspace = true
+pgrx-tests = { path = "/home/jyang102/work/pgrx/pgrx-tests/" }
 rstest = "0.25.0"
 proptest = "1.7.0"
 

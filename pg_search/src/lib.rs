@@ -130,6 +130,7 @@ pub mod pg_test {
 
         if cfg!(not(feature = "pg17")) {
             options.push("shared_preload_libraries='pg_search'");
+            options.push("log_statement='all'");
         }
 
         options

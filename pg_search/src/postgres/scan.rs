@@ -278,11 +278,11 @@ pub unsafe extern "C-unwind" fn amgettuple(
 #[pg_guard]
 pub unsafe extern "C-unwind" fn amgetbitmap(
     scan: pg_sys::IndexScanDesc,
-    tbm: *mut pg_sys::TIDBitmap,
+    tbm: *mut *mut pg_sys::Node,
 ) -> i64 {
     assert!(!tbm.is_null());
     assert!(!scan.is_null());
-
+    let tbm = *tbm as *mut pg_sys::TIDBitmap;
     let state = {
         // SAFETY:  We set `scan.opaque` to a leaked pointer of type `PgSearchScanState` above in
         // amrescan, which is always called prior to this function

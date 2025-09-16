@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 use pgrx::{pg_guard, pg_sys, PgMemoryContexts};
 use std::collections::hash_map::Entry;
 
-unsafe fn add_path(rel: *mut pg_sys::RelOptInfo, mut path: pg_sys::CustomPath) {
+unsafe fn add_path(rel: *mut pg_sys::RelOptInfo, mut path: pg_sys::CustomPath, root: *mut pg_sys::PlannerInfo) {
     let forced = path.flags & Flags::Force as u32 != 0;
     path.flags ^= Flags::Force as u32; // make sure to clear this flag because it's special to us
 
@@ -57,7 +57,7 @@ unsafe fn add_path(rel: *mut pg_sys::RelOptInfo, mut path: pg_sys::CustomPath) {
     }
 
     // add this path for consideration
-    pg_sys::add_path(rel, custom_path.cast());
+    pg_sys::add_path(rel, custom_path.cast(), root);
 }
 
 pub fn register_rel_pathlist<CS>(_: CS)
@@ -130,7 +130,7 @@ pub extern "C-unwind" fn paradedb_rel_pathlist_callback<CS>(
             return;
         };
 
-        add_path(rel, path)
+        add_path(rel, path, root)
     }
 }
 
@@ -208,6 +208,6 @@ pub extern "C-unwind" fn paradedb_upper_paths_callback<CS>(
             return;
         };
 
-        add_path(output_rel, path)
+        add_path(output_rel, path, root)
     }
 }

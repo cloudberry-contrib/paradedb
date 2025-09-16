@@ -116,6 +116,7 @@ fn search_with_term_support(arg: Internal) -> ReturnedNodePointer {
                 inputcollid: pg_sys::Oid::INVALID,
                 args: args.into_pg(),
                 location: -1,
+                is_tablefunc: false,
             }
         })
         .unwrap_or(ReturnedNodePointer(None))

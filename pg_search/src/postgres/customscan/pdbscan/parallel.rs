@@ -143,6 +143,7 @@ pub unsafe fn checkout_segment(pscan_state: *mut ParallelScanState) -> Option<Se
     #[cfg(not(any(feature = "pg14", feature = "pg15")))]
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
 
+    #[allow(clippy::never_loop)]
     loop {
         let mutex = (*pscan_state).acquire_mutex();
         let remaining_segments = (*pscan_state).remaining_segments();

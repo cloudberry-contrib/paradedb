@@ -123,6 +123,7 @@ pub fn atatat_support(arg: Internal) -> ReturnedNodePointer {
                             inputcollid: pg_sys::Oid::INVALID,
                             args: args.into_pg(),
                             location: -1,
+                            is_tablefunc: false,
                         }
                     }
 
@@ -150,6 +151,7 @@ pub fn atatat_support(arg: Internal) -> ReturnedNodePointer {
                             inputcollid: pg_sys::Oid::INVALID,
                             args: args.into_pg(),
                             location: -1,
+                            is_tablefunc: false,
                         }
                     }
                 }
