@@ -3147,6 +3147,7 @@ dependencies = [
 [[package]]
 name = "pgrx"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "atomic-traits",
  "bitflags 2.9.1",
@@ -3169,6 +3170,7 @@ dependencies = [
 [[package]]
 name = "pgrx-bindgen"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
@@ -3186,6 +3188,7 @@ dependencies = [
 [[package]]
 name = "pgrx-macros"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "pgrx-sql-entity-graph",
  "proc-macro2",
@@ -3196,6 +3199,7 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-config"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "cargo_toml",
  "codepage",
@@ -3215,6 +3219,7 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-sys"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "cee-scape",
  "libc",
@@ -3228,6 +3233,7 @@ dependencies = [
 [[package]]
 name = "pgrx-sql-entity-graph"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "convert_case 0.8.0",
  "eyre",
@@ -3242,6 +3248,7 @@ dependencies = [
 [[package]]
 name = "pgrx-tests"
 version = "0.15.0"
+source = "git+https://github.com/cloudberry-contrib/pgrx?branch=dev#9d59f591bb652cb8ea4e42143d25c3b7605ce32a"
 dependencies = [
  "clap-cargo",
  "eyre",
