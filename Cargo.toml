@@ -29,9 +29,9 @@ tantivy = { git = "https://github.com/paradedb/tantivy.git", package = "tantivy"
   "lz4-compression",
 ], default-features = false }
 
-pgrx = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev", features = ["pg14", "cbdb"] }
-pgrx-pg-sys = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev", features = ["pg14", "cbdb"] }
-pgrx-tests = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev" }
+pgrx = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev3.0", features = ["pg14", "cbdb"] }
+pgrx-pg-sys = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev3.0", features = ["pg14", "cbdb"] }
+pgrx-tests = { git = "https://github.com/cloudberry-contrib/pgrx", branch = "dev3.0" }
 tantivy-jieba = "0.11.0"
 
 [patch.crates-io]

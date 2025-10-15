@@ -154,6 +154,33 @@ unsafe fn install_planner_hook() {
 
 /// ParadeDB query planner hook for checking distributed query compatibility
 #[pg_guard]
+#[cfg(feature = "cbdb")]
+unsafe extern "C-unwind" fn pg_search_planner_hook(
+    parse: *mut pg_sys::Query,
+    query_string: *const std::os::raw::c_char,
+    cursor_options: i32,
+    bound_params: pg_sys::ParamListInfo,
+    optimizer_options: *mut pg_sys::OptimizerOptions,
+) -> *mut pg_sys::PlannedStmt {
+    // Call original planner
+    #[allow(static_mut_refs)]
+    let planned_stmt = if let Some(Some(original_hook)) = ORIGINAL_PLANNER_HOOK {
+        original_hook(parse, query_string, cursor_options, bound_params, optimizer_options)
+    } else {
+        pg_sys::standard_planner(parse, query_string, cursor_options, bound_params, optimizer_options)
+    };
+
+    // Check for motion nodes and report error if found (skip only for EXPLAIN without ANALYZE)
+    if !should_skip_motion_check(parse) {
+        check_for_motion_nodes(planned_stmt);
+    }
+
+    planned_stmt
+}
+
+/// ParadeDB query planner hook for checking distributed query compatibility
+#[pg_guard]
+#[cfg(not(feature = "cbdb"))]
 unsafe extern "C-unwind" fn pg_search_planner_hook(
     parse: *mut pg_sys::Query,
     query_string: *const std::os::raw::c_char,
