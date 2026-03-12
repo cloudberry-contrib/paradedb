@@ -744,6 +744,14 @@ mod plan {
                 return 0.0;
             }
 
+            // Only attempt direct block reads for standard heap tables.
+            // Non-heap tables (e.g., AO/AOCO tables in CBDB) store data in segment
+            // files, not standard 8KB heap blocks; reading block 0 would fail.
+            let relam = unsafe { (*heap_relation.rd_rel).relam };
+            if relam != pg_sys::HEAP_TABLE_AM_OID {
+                return 0.0;
+            }
+
             let bman = BufferManager::new(heap_relation);
             let buffer = bman.get_buffer(0);
             let page = buffer.page();
