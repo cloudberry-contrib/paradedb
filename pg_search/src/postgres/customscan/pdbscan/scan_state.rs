@@ -22,9 +22,9 @@ use crate::postgres::customscan::pdbscan::exec_methods::ExecMethod;
 use crate::postgres::customscan::pdbscan::projections::snippet::SnippetType;
 use crate::postgres::customscan::qual_inspect::Qual;
 use crate::postgres::customscan::CustomScanState;
+use crate::postgres::heap::{HeapFetchState, VisibilityChecker};
 use crate::postgres::rel::PgSearchRelation;
 use crate::postgres::utils::u64_to_item_pointer;
-use crate::postgres::visibility_checker::VisibilityChecker;
 use crate::postgres::ParallelScanState;
 use crate::query::SearchQueryInput;
 use pgrx::heap_tuple::PgHeapTuple;
@@ -63,6 +63,7 @@ pub struct PdbScanState {
     pub lockmode: pg_sys::LOCKMODE,
 
     pub visibility_checker: Option<VisibilityChecker>,
+    pub doc_from_heap_state: Option<HeapFetchState>,
     pub segment_count: usize,
     pub quals: Option<Qual>,
 
@@ -323,110 +324,126 @@ impl PdbScanState {
     ///
     /// This function supports text, text[], and json/jsonb fields
     unsafe fn doc_from_heap(&self, ctid: u64, field: &FieldName) -> Option<String> {
-        let heaprel = self.heaprel();
+        let heaprel = self.heaprel.as_ref().expect("should have a heap relation");
         let mut ipd = pg_sys::ItemPointerData::default();
         u64_to_item_pointer(ctid, &mut ipd);
 
-        let mut htup = pg_sys::HeapTupleData {
-            t_self: ipd,
-            ..Default::default()
-        };
-        let mut buffer: pg_sys::Buffer = pg_sys::InvalidBuffer as i32;
+        // Create a per-call scan+slot to avoid AO table snapshot consistency issues.
+        // The CBDB AO AM asserts that all calls on a reused scan use the identical
+        // snapshot pointer. Rather than managing snapshot lifecycle in HeapFetchState,
+        // we open a fresh scan per call — snippet generation is infrequent so the
+        // overhead is acceptable.
+        let snapshot = pg_sys::GetActiveSnapshot();
+        let scan = pg_sys::table_index_fetch_begin(heaprel.as_ptr());
+        let slot_ops = pg_sys::table_slot_callbacks(heaprel.as_ptr());
+        let slot = pg_sys::MakeTupleTableSlot(heaprel.rd_att, slot_ops);
 
-        #[cfg(feature = "pg14")]
-        {
-            if !pg_sys::heap_fetch(
-                heaprel.as_ptr(),
-                pg_sys::GetActiveSnapshot(),
-                &mut htup,
-                &mut buffer,
-            ) {
-                return None;
-            }
+        let mut call_again = false;
+        let mut all_dead = false;
+        let found = pg_sys::table_index_fetch_tuple(
+            scan,
+            &mut ipd,
+            snapshot,
+            slot,
+            &mut call_again,
+            &mut all_dead,
+        );
+
+        if !found {
+            pg_sys::ExecDropSingleTupleTableSlot(slot);
+            pg_sys::table_index_fetch_end(scan);
+            return None;
         }
-
-        #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-        {
-            if !pg_sys::heap_fetch(
-                heaprel.as_ptr(),
-                pg_sys::GetActiveSnapshot(),
-                &mut htup,
-                &mut buffer,
-                false,
-            ) {
-                return None;
-            }
-        }
-
-        pg_sys::ReleaseBuffer(buffer);
 
         let tuple_desc = PgTupleDesc::from_pg_unchecked(heaprel.rd_att);
-        let heap_tuple = PgHeapTuple::from_heap_tuple(tuple_desc.clone(), &mut htup);
-        let (index, attribute) = heap_tuple.get_attribute_by_name(&field.root()).unwrap();
-
-        if pg_sys::type_is_array(attribute.type_oid().value()) {
-            // varchar[] and text[] are flattened into a single string
-            // to emulate Tantivy's default behavior for highlighting text arrays
-            Some(
-                pgrx::htup::heap_getattr::<Vec<Option<String>>, _>(
-                    &pgrx::pgbox::PgBox::from_pg(&mut htup),
-                    index,
-                    &tuple_desc,
-                )
-                .unwrap_or_default()
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" "),
-            )
-        } else {
-            match (field.root(), field.path()) {
-                (root, Some(path)) => {
-                    let pointer = format!("/{}", path.replace('.', "/"));
-                    let field = match attribute.type_oid().value() {
-                        pg_sys::JSONOID => {
-                            let json_value = heap_tuple
-                                .get_by_name::<pgrx::datum::Json>(&root)
-                                .unwrap_or_else(|_| {
-                                    panic!(
-                                        "doc_from_heap: should be able to read json field {root}"
-                                    )
-                                })?
-                                .0;
-                            json_value.pointer(&pointer).cloned()?
-                        }
-                        pg_sys::JSONBOID => {
-                            let json_value = heap_tuple
-                                .get_by_name::<pgrx::datum::JsonB>(&root)
-                                .unwrap_or_else(|_| {
-                                    panic!(
-                                        "doc_from_heap: should be able to read jsonb field {root}"
-                                    )
-                                })?
-                                .0;
-                            json_value.pointer(&pointer).cloned()?
-                        }
-                        unsupported => {
-                            return None;
-                        }
-                    };
-
-                    match field {
-                        serde_json::Value::String(val) => Some(val),
-                        serde_json::Value::Array(array) => Some(array.iter().filter_map(|v| match v {
-                            serde_json::Value::String(s) => Some(s.to_owned()),
-                            _ => None
-                        }).collect::<Vec<_>>().join(" ")),
-                        val => unimplemented!(
-                            "only text fields for json/jsonb are supported for snippets, found {:?}",
-                            val
-                        ),
-                    }
-                }
-                (root, None) => heap_tuple
-                    .get_by_name(&root)
-                    .unwrap_or_else(|_| panic!("doc_from_heap: should be able to read {root}")),
-            }
+        let mut should_free = false;
+        // ExecFetchSlotHeapTuple handles both heap (TTSOpsBufferHeapTuple) and AO
+        // (TTSOpsVirtual) slots. For AO slots it calls copy_heap_tuple which forms a
+        // new HeapTuple from tts_values/tts_isnull, so should_free will be true.
+        let htup = pg_sys::ExecFetchSlotHeapTuple(slot, true, &mut should_free);
+        if htup.is_null() {
+            pg_sys::ExecDropSingleTupleTableSlot(slot);
+            pg_sys::table_index_fetch_end(scan);
+            return None;
         }
+
+        let result = (|| {
+            let heap_tuple = PgHeapTuple::from_heap_tuple(tuple_desc.clone(), &mut *htup);
+            let (index, attribute) = heap_tuple.get_attribute_by_name(&field.root()).unwrap();
+
+            if pg_sys::type_is_array(attribute.type_oid().value()) {
+                // varchar[] and text[] are flattened into a single string
+                // to emulate Tantivy's default behavior for highlighting text arrays
+                Some(
+                    pgrx::htup::heap_getattr::<Vec<Option<String>>, _>(
+                        &pgrx::pgbox::PgBox::from_pg(htup),
+                        index,
+                        &tuple_desc,
+                    )
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                )
+            } else {
+                match (field.root(), field.path()) {
+                    (root, Some(path)) => {
+                        let pointer = format!("/{}", path.replace('.', "/"));
+                        let field = match attribute.type_oid().value() {
+                            pg_sys::JSONOID => {
+                                let json_value = heap_tuple
+                                    .get_by_name::<pgrx::datum::Json>(&root)
+                                    .unwrap_or_else(|_| {
+                                        panic!(
+                                            "doc_from_heap: should be able to read json field {root}"
+                                        )
+                                    })?
+                                    .0;
+                                json_value.pointer(&pointer).cloned()?
+                            }
+                            pg_sys::JSONBOID => {
+                                let json_value = heap_tuple
+                                    .get_by_name::<pgrx::datum::JsonB>(&root)
+                                    .unwrap_or_else(|_| {
+                                        panic!(
+                                            "doc_from_heap: should be able to read jsonb field {root}"
+                                        )
+                                    })?
+                                    .0;
+                                json_value.pointer(&pointer).cloned()?
+                            }
+                            _ => {
+                                return None;
+                            }
+                        };
+
+                        match field {
+                            serde_json::Value::String(val) => Some(val),
+                            serde_json::Value::Array(array) => {
+                                Some(array.into_iter().filter_map(|v| match v {
+                                    serde_json::Value::String(s) => Some(s),
+                                    _ => None,
+                                }).collect::<Vec<_>>().join(" "))
+                            }
+                            val => unimplemented!(
+                                "only text fields for json/jsonb are supported for snippets, found {:?}",
+                                val
+                            ),
+                        }
+                    }
+                    (root, None) => heap_tuple
+                        .get_by_name(&root)
+                        .unwrap_or_else(|_| panic!("doc_from_heap: should be able to read {root}")),
+                }
+            }
+        })();
+
+        if should_free {
+            pg_sys::heap_freetuple(htup);
+        }
+        pg_sys::ExecDropSingleTupleTableSlot(slot);
+        pg_sys::table_index_fetch_end(scan);
+        result
     }
 }

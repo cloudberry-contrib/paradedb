@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 切换到测试目录
-cd /home/jyang102/work/paradedb/pg_search/tests/pg_regress
+# Resolve the directory containing this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 运行 pg_regress
+# Locate pg_regress dynamically via pg_config --pgxs
+# e.g. /usr/local/gpdb/lib/postgresql/pgxs/src/makefiles/pgxs.mk
+#   -> /usr/local/gpdb/lib/postgresql/pgxs/src/test/regress/pg_regress
+PG_CONFIG="${PGRX_PG_CONFIG_PATH:-$(which pg_config)}"
+PGXS="$("$PG_CONFIG" --pgxs)"
+PG_REGRESS="$(dirname "$PGXS")/../test/regress/pg_regress"
+PG_REGRESS="$(cd "$(dirname "$PG_REGRESS")" && pwd)/$(basename "$PG_REGRESS")"
+
+# Run pg_regress
 env -u PGDATABASE -u PGHOST -u PGPORT -u PGUSER \
-  "/home/jyang102/install/lib/postgresql/pgxs/src/test/regress/pg_regress" \
+  "$PG_REGRESS" \
   --host "localhost" \
-  --port "28814" \
+  --port "7000" \
   --use-existing \
-  --dbname="regress" \
-  --inputdir="/home/jyang102/work/paradedb/pg_search/tests/pg_regress" \
-  --outputdir="/home/jyang102/work/paradedb/pg_search/tests/pg_regress" \
+  --dbname="gpadmin" \
+  --inputdir="$SCRIPT_DIR" \
+  --outputdir="$SCRIPT_DIR" \
   --ignore-plans \
   --init-file=./init_file \
   setup \
+  ao_partitioned \
   aggregate-udf \
   aggregate \
   boost \
