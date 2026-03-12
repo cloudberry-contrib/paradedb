@@ -24,7 +24,7 @@ mod scan_state;
 mod solve_expr;
 
 use crate::api::operator::{anyelement_query_input_opoid, estimate_selectivity};
-use crate::api::{HashMap, HashSet, OrderByFeature, OrderByInfo};
+use crate::api::{HashMap, HashSet, OrderByFeature, OrderByInfo, Varno};
 use crate::gucs;
 use crate::index::fast_fields_helper::WhichFastField;
 use crate::index::mvcc::MvccSatisfies;
@@ -61,7 +61,7 @@ use crate::postgres::customscan::{
 use crate::postgres::rel::PgSearchRelation;
 use crate::postgres::rel_get_bm25_index;
 use crate::postgres::var::find_var_relation;
-use crate::postgres::visibility_checker::VisibilityChecker;
+use crate::postgres::heap::{HeapFetchState, VisibilityChecker};
 use crate::query::pdb_query::pdb;
 use crate::query::SearchQueryInput;
 use crate::schema::{SearchField, SearchIndexSchema};
@@ -612,7 +612,7 @@ impl CustomScan for PdbScan {
 
                     // track a triplet of (varno, varattno, attname) as 3 individual
                     // entries in the `attname_lookup` List
-                    attname_lookup.insert(((*var).varno, (*var).varattno), attname);
+                    attname_lookup.insert((rti as Varno, (*var).varattno), attname);
                 }
             }
 
@@ -867,12 +867,14 @@ impl CustomScan for PdbScan {
                 return;
             }
 
-            // setup the structures we need to do mvcc checking
+            // setup the structures we need to do mvcc checking and heap fetching
             state.custom_state_mut().visibility_checker =
                 Some(VisibilityChecker::with_rel_and_snap(
                     state.custom_state().heaprel(),
                     pg_sys::GetActiveSnapshot(),
                 ));
+            state.custom_state_mut().doc_from_heap_state =
+                Some(HeapFetchState::new(state.custom_state().heaprel()));
 
             // and finally, get the custom scan itself properly initialized
             let tupdesc = state.custom_state().heaptupdesc();
@@ -1073,6 +1075,7 @@ impl CustomScan for PdbScan {
     fn end_custom_scan(state: &mut CustomScanStateWrapper<Self>) {
         // get some things dropped now
         drop(state.custom_state_mut().visibility_checker.take());
+        drop(state.custom_state_mut().doc_from_heap_state.take());
         drop(state.custom_state_mut().search_reader.take());
         drop(std::mem::take(
             &mut state.custom_state_mut().snippet_generators,

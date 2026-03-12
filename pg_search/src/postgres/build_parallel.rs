@@ -732,6 +732,15 @@ mod plan {
         // if the reltuples estimate is not available, estimate the number of tuples in the heap
         // by multiplying the number of pages by the max offset number of the first page
         if reltuples <= 0.0 {
+            // Non-heap tables (e.g., AO/AOCO in CBDB) store data in segment files, not
+            // standard 8KB heap blocks. Skip the block-read path entirely for them.
+            // rd_rel->reltuples is -1 when statistics haven't been collected yet, and 0
+            // when the table is actually empty; in either case we cannot do better here.
+            let relam = unsafe { (*heap_relation.rd_rel).relam };
+            if relam != pg_sys::HEAP_TABLE_AM_OID {
+                return reltuples.max(0.0) as f64;
+            }
+
             let npages = unsafe {
                 pg_sys::RelationGetNumberOfBlocksInFork(
                     heap_relation.as_ptr(),
@@ -741,14 +750,6 @@ mod plan {
 
             if npages == 0 {
                 // the tuple count actually is 0
-                return 0.0;
-            }
-
-            // Only attempt direct block reads for standard heap tables.
-            // Non-heap tables (e.g., AO/AOCO tables in CBDB) store data in segment
-            // files, not standard 8KB heap blocks; reading block 0 would fail.
-            let relam = unsafe { (*heap_relation.rd_rel).relam };
-            if relam != pg_sys::HEAP_TABLE_AM_OID {
                 return 0.0;
             }
 

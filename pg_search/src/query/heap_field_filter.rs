@@ -59,58 +59,26 @@ impl HeapFieldFilter {
         relation: &PgSearchRelation,
         expr_node: *mut pg_sys::Node,
     ) -> bool {
-        // Use heap_fetch to safely get the tuple
-        let mut heap_tuple = pg_sys::HeapTupleData {
-            t_len: 0,
-            t_self: *ctid, // Set the ctid we want to fetch
-            t_tableOid: relation.oid(),
-            t_data: std::ptr::null_mut(),
-        };
-        let mut buffer = pg_sys::InvalidBuffer as pg_sys::Buffer;
+        // Use table_index_fetch_tuple (table-AM-aware, works for heap and AO/AOCO tables)
+        let scan = pg_sys::table_index_fetch_begin(relation.as_ptr());
+        // Use the AM-appropriate slot type so AO/AOCO tables can store tuples into it
+        let slot_ops = pg_sys::table_slot_callbacks(relation.as_ptr());
+        let slot = pg_sys::MakeTupleTableSlot(relation.rd_att, slot_ops);
 
-        // Fetch the heap tuple using PostgreSQL's heap_fetch API
-        // Function signature differs between PostgreSQL versions
-        #[cfg(feature = "pg14")]
-        let valid_tuple = pg_sys::heap_fetch(
-            relation.as_ptr(),
-            pgrx::pg_sys::GetActiveSnapshot(),
-            &mut heap_tuple,
-            &mut buffer,
+        let mut call_again = false;
+        let mut all_dead = false;
+        let found = pg_sys::table_index_fetch_tuple(
+            scan,
+            ctid,
+            pg_sys::GetActiveSnapshot(),
+            slot,
+            &mut call_again,
+            &mut all_dead,
         );
 
-        #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-        let valid_tuple = pg_sys::heap_fetch(
-            relation.as_ptr(),
-            pgrx::pg_sys::GetActiveSnapshot(),
-            &mut heap_tuple,
-            &mut buffer,
-            false, // keep_buf
-        );
-
-        if !valid_tuple {
-            if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-                pg_sys::ReleaseBuffer(buffer);
-            }
-            return false;
-        }
-
-        // Create a tuple table slot for expression evaluation
-        let tuple_desc = relation.rd_att;
-        let slot = pg_sys::MakeTupleTableSlot(tuple_desc, &pg_sys::TTSOpsHeapTuple);
-        if slot.is_null() {
-            if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-                pg_sys::ReleaseBuffer(buffer);
-            }
-            return false;
-        }
-
-        // Store the heap tuple in the slot
-        let stored_slot = pg_sys::ExecStoreHeapTuple(&mut heap_tuple, slot, false);
-        if stored_slot.is_null() {
+        if !found {
             pg_sys::ExecDropSingleTupleTableSlot(slot);
-            if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-                pg_sys::ReleaseBuffer(buffer);
-            }
+            pg_sys::table_index_fetch_end(scan);
             return false;
         }
 
@@ -118,9 +86,7 @@ impl HeapFieldFilter {
         let econtext = pg_sys::CreateStandaloneExprContext();
         if econtext.is_null() {
             pg_sys::ExecDropSingleTupleTableSlot(slot);
-            if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-                pg_sys::ReleaseBuffer(buffer);
-            }
+            pg_sys::table_index_fetch_end(scan);
             return false;
         }
 
@@ -136,25 +102,19 @@ impl HeapFieldFilter {
             self.initialized_expression = None;
             pg_sys::FreeExprContext(econtext, false);
             pg_sys::ExecDropSingleTupleTableSlot(slot);
-            if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-                pg_sys::ReleaseBuffer(buffer);
-            }
+            pg_sys::table_index_fetch_end(scan);
             return false;
         }
 
         // Evaluate the expression
         let mut is_null = false;
         let result = pg_sys::ExecEvalExpr(expr_state, econtext, &mut is_null);
-
-        // Convert the result to a boolean
         let eval_result = bool::from_datum(result, is_null).unwrap_or(false);
 
-        // Cleanup resources in reverse order
+        // Cleanup resources
         pg_sys::FreeExprContext(econtext, false);
         pg_sys::ExecDropSingleTupleTableSlot(slot);
-        if buffer != pg_sys::InvalidBuffer as pg_sys::Buffer {
-            pg_sys::ReleaseBuffer(buffer);
-        }
+        pg_sys::table_index_fetch_end(scan);
 
         eval_result
     }
