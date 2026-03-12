@@ -1,0 +1,184 @@
+-- Test pg_search on AO (append-only) partitioned tables in CBDB
+DROP TABLE IF EXISTS products_p CASCADE;
+NOTICE:  table "products_p" does not exist, skipping
+CREATE TABLE products_p (
+    id SERIAL,
+    description TEXT,
+    rating INTEGER,
+    category TEXT,
+    price NUMERIC,
+    in_stock BOOLEAN,
+    availability_date date
+)
+WITH (appendonly='true', compresstype=zstd, compresslevel='7') DISTRIBUTED BY (id)
+PARTITION BY RANGE(availability_date) (
+    PARTITION p201507 START ('2015-07-01'::date) END ('2015-08-01'::date),
+    PARTITION p201508 START ('2015-08-01'::date) END ('2015-09-01'::date),
+    DEFAULT PARTITION pothers
+);
+INSERT INTO products_p (description, rating, category, price, in_stock, availability_date) VALUES
+('Laptop with fast processor', 5, 'Electronics', 999.99,  true,  '2015-07-01'),
+('Gaming laptop with RGB',     5, 'Electronics', 1299.99, true,  '2015-07-31'),
+('Toy laptop for kids',        3, 'Toys',        499.99,  false, '2015-08-01'),
+('Wireless keyboard and mouse',4, 'Electronics', 79.99,   true,  '2015-08-31'),
+('Mechanical keyboard RGB',    5, 'Electronics', 149.99,  true,  '2015-08-11'),
+('Running shoes for athletes', 5, 'Sports',      89.99,   true,  '2015-08-21'),
+('Winter jacket warm',         4, 'Clothing',    129.99,  true,  '2015-07-11'),
+('Summer jacket light',        3, 'Clothing',    59.99,   true,  '2015-08-21');
+CREATE INDEX products_idx_s ON products_p
+USING bm25 (id, description, rating, category, price)
+WITH (
+    key_field='id',
+    text_fields='{"description": {}, "category": {"fast": true}}',
+    numeric_fields='{"rating": {"fast": true}, "price": {"fast": true}}'
+);
+-- Basic search on AO partitioned table
+SELECT id, description FROM products_p WHERE description @@@ 'laptop' ORDER BY id;
+ id |        description         
+----+----------------------------
+  1 | Laptop with fast processor
+  2 | Gaming laptop with RGB
+  3 | Toy laptop for kids
+(3 rows)
+
+-- Aggregate on AO partitioned table
+SELECT COUNT(*), SUM(price) FROM products_p WHERE description @@@ 'laptop';
+ count |   sum   
+-------+---------
+     3 | 2799.97
+(1 row)
+
+-- Explain aggregate query
+EXPLAIN (FORMAT TEXT, COSTS OFF, TIMING OFF, VERBOSE)
+SELECT COUNT(*), SUM(price) FROM products_p WHERE description @@@ 'laptop';
+                                                                                               QUERY PLAN                                                                                               
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: count(*), sum(products_p.price)
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         Output: (PARTIAL count(*)), (PARTIAL sum(products_p.price))
+         ->  Partial Aggregate
+               Output: PARTIAL count(*), PARTIAL sum(products_p.price)
+               ->  Append
+                     ->  Custom Scan (ParadeDB Scan) on public.products_p_1_prt_p201507 products_p_1
+                           Output: products_p_1.price
+                           Table: products_p_1_prt_p201507
+                           Index: products_p_1_prt_p201507_id_description_rating_category_pri_idx
+                           Exec Method: MixedFastFieldExecState
+                           Fast Fields: price
+                           Numeric Fast Fields: price
+                           Scores: false
+                           Tantivy Query: {"with_index":{"query":{"with_index":{"query":{"parse_with_field":{"field":"description","query_string":"laptop","lenient":null,"conjunction_mode":null}}}}}}
+                     ->  Custom Scan (ParadeDB Scan) on public.products_p_1_prt_p201508 products_p_2
+                           Output: products_p_2.price
+                           Table: products_p_1_prt_p201508
+                           Index: products_p_1_prt_p201508_id_description_rating_category_pri_idx
+                           Exec Method: MixedFastFieldExecState
+                           Fast Fields: price
+                           Numeric Fast Fields: price
+                           Scores: false
+                           Tantivy Query: {"with_index":{"query":{"with_index":{"query":{"parse_with_field":{"field":"description","query_string":"laptop","lenient":null,"conjunction_mode":null}}}}}}
+                     ->  Custom Scan (ParadeDB Scan) on public.products_p_1_prt_pothers products_p_3
+                           Output: products_p_3.price
+                           Table: products_p_1_prt_pothers
+                           Index: products_p_1_prt_pothers_id_description_rating_category_pri_idx
+                           Exec Method: MixedFastFieldExecState
+                           Fast Fields: price
+                           Numeric Fast Fields: price
+                           Scores: false
+                           Tantivy Query: {"with_index":{"query":{"with_index":{"query":{"parse_with_field":{"field":"description","query_string":"laptop","lenient":null,"conjunction_mode":null}}}}}}
+ Settings: optimizer = 'off'
+ Optimizer: Postgres query optimizer
+(36 rows)
+
+-- -----------------------------------------------------------------------
+-- Heap field filter: non-BM25-indexed columns in AND conditions
+-- (in_stock, availability_date are NOT in the BM25 index, so the filter
+--  is applied against the heap after the BM25 scan via heap_field_filter)
+-- -----------------------------------------------------------------------
+-- Filter on boolean heap column (in_stock not indexed)
+SELECT id, description, in_stock
+FROM products_p
+WHERE description @@@ 'laptop' AND in_stock = true
+ORDER BY id;
+ id |        description         | in_stock 
+----+----------------------------+----------
+  1 | Laptop with fast processor | t
+  2 | Gaming laptop with RGB     | t
+(2 rows)
+
+-- Filter on date heap column (availability_date not indexed)
+SELECT id, description, availability_date
+FROM products_p
+WHERE description @@@ 'laptop' AND availability_date < '2015-08-01'
+ORDER BY id;
+ id |        description         | availability_date 
+----+----------------------------+-------------------
+  1 | Laptop with fast processor | 07-01-2015
+  2 | Gaming laptop with RGB     | 07-31-2015
+(2 rows)
+
+-- Combined: BM25 + two non-indexed heap filters
+SELECT id, description, in_stock, availability_date
+FROM products_p
+WHERE description @@@ 'laptop'
+  AND in_stock = true
+  AND availability_date < '2015-08-01'
+ORDER BY id;
+ id |        description         | in_stock | availability_date 
+----+----------------------------+----------+-------------------
+  1 | Laptop with fast processor | t        | 07-01-2015
+  2 | Gaming laptop with RGB     | t        | 07-31-2015
+(2 rows)
+
+-- Aggregate with non-indexed heap filter
+SELECT COUNT(*), SUM(price)
+FROM products_p
+WHERE description @@@ 'laptop' AND in_stock = true;
+ count |   sum   
+-------+---------
+     2 | 2299.98
+(1 row)
+
+-- -----------------------------------------------------------------------
+-- Snippet generation on AO partitioned table
+-- (exercises doc_from_heap → ExecFetchSlotHeapTuple on TTSOpsVirtual slot)
+-- -----------------------------------------------------------------------
+DROP TABLE IF EXISTS products_ao CASCADE;
+NOTICE:  table "products_ao" does not exist, skipping
+CREATE TABLE products_ao (
+    id SERIAL,
+    description TEXT,
+    category TEXT,
+    created_date date
+) WITH (appendonly='true', compresstype=zstd, compresslevel='1') DISTRIBUTED BY (id)
+PARTITION BY RANGE(created_date) (
+    PARTITION p2015h1 START ('2015-01-01'::date) END ('2015-07-01'::date),
+    PARTITION p2015h2 START ('2015-07-01'::date) END ('2016-01-01'::date),
+    DEFAULT PARTITION pothers
+);
+INSERT INTO products_ao (description, category, created_date) VALUES
+('Laptop with fast processor', 'Electronics', '2015-02-01'),
+('Gaming laptop with RGB',     'Electronics', '2015-08-01'),
+('Toy laptop for kids',        'Toys',        '2015-11-01'),
+('Wireless keyboard and mouse','Electronics', '2015-03-01');
+CREATE INDEX products_ao_idx ON products_ao
+USING bm25 (id, description, category)
+WITH (
+    key_field='id',
+    text_fields='{"description": {}, "category": {}}'
+);
+-- Snippet on AO partitioned table (per-call scan avoids snapshot assertion)
+SELECT id, paradedb.snippet(description)
+FROM products_ao
+WHERE description @@@ 'laptop'
+ORDER BY id;
+ id |              snippet              
+----+-----------------------------------
+  1 | <b>Laptop</b> with fast processor
+  2 | Gaming <b>laptop</b> with RGB
+  3 | Toy <b>laptop</b> for kids
+(3 rows)
+
+DROP TABLE IF EXISTS products_ao CASCADE;
+DROP TABLE IF EXISTS products_p CASCADE;

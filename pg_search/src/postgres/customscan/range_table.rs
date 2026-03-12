@@ -102,6 +102,42 @@ pub unsafe fn is_partitioned_table_setup(
     false
 }
 
+/// Returns true if the RTE at `rti` is a partitioned table.
+pub unsafe fn rte_is_partitioned(root: *mut pg_sys::PlannerInfo, rti: pg_sys::Index) -> bool {
+    let rtable = (*(*root).parse).rtable;
+    let rte = pg_sys::rt_fetch(rti, rtable);
+    (*rte).relkind as u8 == pg_sys::RELKIND_PARTITIONED_TABLE
+}
+
+/// Returns true if the RTI `parent` is a partition child of the partitioned table at RTI `child`.
+///
+/// Note: the parameter names follow upstream convention where `parent` is the candidate child
+/// partition RTI (data.rti) and `child` is the partitioned table RTI (var.varno).
+/// The implementation looks up `simple_rel_array[child]->all_partrels` and checks membership.
+pub unsafe fn rte_is_parent(
+    root: *mut pg_sys::PlannerInfo,
+    parent: pg_sys::Index,
+    child: pg_sys::Index,
+) -> bool {
+    if (*root).simple_rel_array.is_null()
+        || child > (*root).simple_rel_array_size as pg_sys::Index
+    {
+        return false;
+    }
+
+    let parent_rel_info_ptr = *(*root).simple_rel_array.add(child as usize);
+    if parent_rel_info_ptr.is_null() {
+        return false;
+    }
+
+    let parent_rel_info = &*parent_rel_info_ptr;
+    if parent_rel_info.all_partrels.is_null() {
+        return false;
+    }
+
+    pg_sys::bms_is_member(parent as i32, parent_rel_info.all_partrels)
+}
+
 /// Get the RangeTblEntry for the given index from the given array.
 ///
 /// Note that range tables are always 1-indexed, so the 0th element is wasted in the given array.
