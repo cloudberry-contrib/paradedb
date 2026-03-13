@@ -26,6 +26,7 @@ env -u PGDATABASE -u PGHOST -u PGPORT -u PGUSER \
   --init-file=./init_file \
   setup \
   ao_partitioned \
+  heap_partitioned \
   aggregate-udf \
   aggregate \
   boost \
