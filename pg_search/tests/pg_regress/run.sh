@@ -27,6 +27,7 @@ env -u PGDATABASE -u PGHOST -u PGPORT -u PGUSER \
   setup \
   ao_partitioned \
   heap_partitioned \
+  partitioned_table_joins \
   aggregate-udf \
   aggregate \
   boost \
