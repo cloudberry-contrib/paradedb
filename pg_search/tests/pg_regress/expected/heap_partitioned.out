@@ -141,6 +141,36 @@ WHERE description @@@ 'laptop' AND in_stock = true;
 (1 row)
 
 -- -----------------------------------------------------------------------
+-- Regression: heap filter expression containing a scalar SubPlan
+-- (PARAM_EXEC). Previously segfaulted inside HeapFieldFilter because
+-- CreateStandaloneExprContext lacks ecxt_param_exec_vals. Custom scan
+-- must reject such predicates and let Postgres apply them as a Filter
+-- above an Index Scan. See qual_inspect.rs try_pushdown().
+-- -----------------------------------------------------------------------
+-- Scalar SubPlan compared to non-indexed boolean heap column
+SELECT id, description, in_stock
+FROM products_hp
+WHERE description @@@ 'laptop'
+  AND in_stock = (SELECT true)
+ORDER BY id;
+ id |        description         | in_stock 
+----+----------------------------+----------
+  1 | Laptop with fast processor | t
+  2 | Gaming laptop with RGB     | t
+(2 rows)
+
+-- Two scalar SubPlans combined with BM25
+SELECT COUNT(*)
+FROM products_hp
+WHERE description @@@ 'laptop'
+  AND in_stock = (SELECT true)
+  AND rating >= (SELECT 4);
+ count 
+-------
+     2
+(1 row)
+
+-- -----------------------------------------------------------------------
 -- Snippet generation on heap partitioned table
 -- -----------------------------------------------------------------------
 DROP TABLE IF EXISTS products_heap CASCADE;
