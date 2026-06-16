@@ -45,10 +45,19 @@ pub unsafe extern "C-unwind" fn amcostestimate(
         .expect("index relation must have a valid corresponding heap relation")
         .reltuples()
         .unwrap_or(1.0) as f64;
-    let page_estimate = pg_sys::RelationGetNumberOfBlocksInFork(
-        indexrel.as_ptr(),
-        pg_sys::ForkNumber::MAIN_FORKNUM,
-    );
+
+    // Partitioned indexes have no physical storage; skip the block-count probe
+    // to avoid opening a non-existent relation file.
+    let is_partitioned_index =
+        pg_sys::get_rel_relkind(indexrel.oid()) as u8 == pg_sys::RELKIND_PARTITIONED_INDEX;
+    let page_estimate = if is_partitioned_index {
+        0u32
+    } else {
+        pg_sys::RelationGetNumberOfBlocksInFork(
+            indexrel.as_ptr(),
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+        )
+    };
     drop(indexrel);
 
     // start these at zero
