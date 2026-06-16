@@ -21,6 +21,7 @@ use crate::gucs::per_tuple_cost;
 use crate::index::fast_fields_helper::FFHelper;
 use crate::index::mvcc::MvccSatisfies;
 use crate::index::reader::index::SearchIndexReader;
+use crate::postgres::index::IndexKind;
 use crate::postgres::rel::PgSearchRelation;
 use crate::postgres::types::TantivyValue;
 use crate::postgres::utils::locate_bm25_index;
@@ -177,33 +178,53 @@ pub fn search_with_query_input(
 
         let index_relation =
             PgSearchRelation::with_lock(index_oid, pg_sys::AccessShareLock as pg_sys::LOCKMODE);
-        let search_reader = SearchIndexReader::open(
-            &index_relation,
-            search_query_input,
-            false,
-            MvccSatisfies::Snapshot,
-        )
-            .expect("search_with_query_input: should be able to open a SearchIndexReader");
-        let schema = search_reader.schema();
-        let key_field_name = schema.key_field_name();
-        let key_field_type = schema.key_field_type().into();
-        let ff_helper =
-            FFHelper::with_fields(&search_reader, &[(key_field_name, key_field_type).into()]);
 
-        // now, query the SearchReader and collect up the docs that match our query.
-        // the matches are cached so that the same input query will return the same results
-        // throughout the duration of the scan
-        let matches = search_reader
-            .search()
-            .map(|(_, doc_address)| {
+        let index_kind = IndexKind::for_index(index_relation)
+            .expect("search_with_query_input: valid index kind required");
+
+        // TODO: This naive implementation collects all matching primary keys from
+        // all child partitions into a single in-memory HashSet. The HashSet uses
+        // Rust's global allocator (not Postgres palloc), so it does NOT respect
+        // `work_mem` or any other Postgres memory limit — it grows until the
+        // backend is OOM-killed by the OS. A streaming approach driven by the
+        // custom scan path is the right long-term fix.
+        let mut matches: HashSet<TantivyValue> = HashSet::default();
+
+        for child_relation in index_kind.partitions() {
+            let search_reader = SearchIndexReader::open(
+                &child_relation,
+                search_query_input.clone(),
+                false,
+                MvccSatisfies::Snapshot,
+            )
+            .expect("search_with_query_input: failed to open SearchIndexReader");
+
+            let schema = search_reader.schema();
+            let key_field_name = schema.key_field_name();
+            let key_field_type = schema.key_field_type().into();
+            let ff_helper =
+                FFHelper::with_fields(&search_reader, &[(key_field_name, key_field_type).into()]);
+
+            // collect up the docs that match our query.
+            // the matches are cached so that the same input query will return the same results
+            // throughout the duration of the scan
+            search_reader.search().for_each(|(_, doc_address)| {
                 check_for_interrupts!();
-                ff_helper
-                    .value(0, doc_address)
-                    .expect("key_field value should not be null")
-            })
-            .collect();
+                match ff_helper.value(0, doc_address) {
+                    Some(val) => {
+                        matches.insert(val);
+                    }
+                    None => {
+                        pgrx::error!(
+                            "search_with_query_input: key_field value should not be null for doc at {:?}",
+                            doc_address
+                        );
+                    }
+                }
+            });
+        }
 
-        (element_oid, matches)
+        (element_oid, CacheEntry::Set(matches))
     });
 
     // finally, see if the value on the lhs of the @@@ operator (which should always be our "key_field")
