@@ -120,7 +120,7 @@ pub unsafe fn rte_is_parent(
     child: pg_sys::Index,
 ) -> bool {
     if (*root).simple_rel_array.is_null()
-        || child > (*root).simple_rel_array_size as pg_sys::Index
+        || child >= (*root).simple_rel_array_size as pg_sys::Index
     {
         return false;
     }
