@@ -18,12 +18,11 @@ env -u PGDATABASE -u PGHOST -u PGPORT -u PGUSER \
   "$PG_REGRESS" \
   --host "localhost" \
   --port "7000" \
-  --use-existing \
   --dbname="gpadmin" \
   --inputdir="$SCRIPT_DIR" \
   --outputdir="$SCRIPT_DIR" \
   --ignore-plans \
-  --init-file=./init_file \
+  --init-file=./init_file --load-extension=pg_search \
   setup \
   ao_partitioned \
   heap_partitioned \
