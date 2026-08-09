@@ -17,7 +17,9 @@
 
 use pgrx::*;
 
-use crate::api::{FieldName, HashMap};
+use crate::api::FieldName;
+#[cfg(not(feature = "cbdb"))]
+use crate::api::HashMap;
 use crate::postgres::types::{TantivyValue, TantivyValueError};
 use crate::query::pdb_query::pdb;
 use crate::query::{SearchQueryInput, TermInput};
@@ -87,12 +89,36 @@ pub fn empty() -> SearchQueryInput {
     SearchQueryInput::Empty
 }
 
+/// On Cloudberry Database, `more_like_this` is currently unusable across all
+/// argument shapes because:
+///   1. Greenplum/CBDB QE slices cannot dispatch SPI queries that access user
+///      relations, so the internal seed-document fetch fails.
+///   2. The SPI seed-fetch parameter type is mis-inferred for non-bigint
+///      key_fields (e.g. uuid produces `uuid = bigint` operator errors).
+///   3. SubPlan-resolved `document_id` arguments crash inside
+///      `pgrx::Uuid::from_slice` with SIGSEGV.
+/// Fail fast with a clear message instead of crashing or returning misleading
+/// errors. Track real MLT-on-MPP support in a future change.
+#[cfg(feature = "cbdb")]
+fn fail_mlt_unsupported() -> ! {
+    panic!(
+        "paradedb.more_like_this is not supported on Cloudberry Database in this build. \
+         The internal seed-document SPI lookup cannot execute on QE slices, and certain \
+         key_field types (e.g. uuid via SubPlan) trigger a backend crash. \
+         See limitations.mdx for details."
+    );
+}
+
 #[pg_extern(name = "more_like_this", immutable, parallel_safe)]
 pub fn more_like_this_empty() -> SearchQueryInput {
+    #[cfg(feature = "cbdb")]
+    fail_mlt_unsupported();
+    #[cfg(not(feature = "cbdb"))]
     panic!("more_like_this must be called with either document_id or document_fields");
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "cbdb", allow(unused_variables))]
 #[pg_extern(name = "more_like_this", immutable, parallel_safe)]
 pub fn more_like_this_fields(
     document_fields: String,
@@ -105,6 +131,13 @@ pub fn more_like_this_fields(
     boost_factor: default!(Option<f32>, "NULL"),
     stop_words: default!(Option<Vec<String>>, "NULL"),
 ) -> SearchQueryInput {
+    #[cfg(feature = "cbdb")]
+    {
+        fail_mlt_unsupported();
+    }
+
+    #[cfg(not(feature = "cbdb"))]
+    {
     let document_fields: HashMap<String, tantivy::schema::OwnedValue> =
         json5::from_str(&document_fields).expect("could not parse document_fields");
 
@@ -120,9 +153,11 @@ pub fn more_like_this_fields(
         document_fields: Some(document_fields.into_iter().collect()),
         document_id: None,
     }
+    } // close cfg(not(feature = "cbdb")) block
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "cbdb", allow(unused_variables))]
 #[pg_extern(name = "more_like_this", immutable, parallel_safe)]
 pub fn more_like_this_id(
     document_id: AnyElement,
@@ -135,6 +170,12 @@ pub fn more_like_this_id(
     boost_factor: default!(Option<f32>, "NULL"),
     stop_words: default!(Option<Vec<String>>, "NULL"),
 ) -> SearchQueryInput {
+    #[cfg(feature = "cbdb")]
+    {
+        fail_mlt_unsupported();
+    }
+
+    #[cfg(not(feature = "cbdb"))]
     SearchQueryInput::MoreLikeThis {
         min_doc_frequency: min_doc_frequency.map(|n| n as u64),
         max_doc_frequency: max_doc_frequency.map(|n| n as u64),

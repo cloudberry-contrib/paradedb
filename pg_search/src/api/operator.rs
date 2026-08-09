@@ -37,6 +37,7 @@ use crate::postgres::var::{find_one_var_and_fieldname, find_var_relation, VarCon
 use crate::query::pdb_query::pdb;
 use crate::query::proximity::ProximityClause;
 use crate::query::SearchQueryInput;
+use crate::UNKNOWN_SELECTIVITY;
 use pgrx::callconv::{BoxRet, FcInfo};
 use pgrx::datum::Datum;
 use pgrx::pgrx_sql_entity_graph::metadata::{
@@ -226,6 +227,14 @@ pub(crate) fn estimate_selectivity(
     indexrel: &PgSearchRelation,
     search_query_input: SearchQueryInput,
 ) -> Option<f64> {
+    // Partitioned indexes have no physical storage of their own; fall back to a
+    // generic selectivity heuristic so we don't dereference a non-existent
+    // heap_relation. Child partition selectivity will be computed when the planner
+    // visits each child path.
+    if indexrel.relkind() == pg_sys::RELKIND_PARTITIONED_INDEX {
+        return Some(UNKNOWN_SELECTIVITY);
+    }
+
     // Check if running on Cloudberry/Greenplum coordinator node
     if crate::gucs::is_gp_coordinator() {
         // On coordinator: get reltuples directly and dispatch to segments for estimate
